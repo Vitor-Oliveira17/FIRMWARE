@@ -72,13 +72,16 @@ static void control_task(void *pvParameters)
         omega_r = rpm * RPM_TO_RAD_S;
 
         // 3. Trava de segurança: Se o robô caiu, desliga o motor
-        if (fabsf(theta) > MAX_RECOVERY_ANGLE_RAD) {
-            motor_set_speed(0);
-            if (++log_counter % 100 == 0) {
-                ESP_LOGW(TAG, "EMERGENCIA: Inclinacao excessiva (%.1f deg). Motor desarmado.", theta / DEG_TO_RAD);
+        if (fabsf(theta) > MAX_RECOVERY_ANGLE_RAD) {    
+
+                motor_set_speed(0);
+
+            if (++log_counter >= 100) {
+                log_counter = 0;
+
+                ESP_LOGW(TAG,
+                        "EMERGENCIA: inclinacao excessiva (%.1f graus)", theta / DEG_TO_RAD);
             }
-            vTaskDelayUntil(&last_wake_time, period_ticks);
-            continue;
         }
 
         // 4 Montagem do vetor de estados x[k] = [theta, theta_dot, omega_r]

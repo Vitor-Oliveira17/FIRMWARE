@@ -26,15 +26,15 @@ extern "C" {
 // PARÂMETROS PADRÃO DO MODELO DISCRETO E GANHOS (MATLAB / SIMULINK)
 // ============================================================================
 #define STATE_CTRL_TS_DEFAULT           0.001f    // Ts = 1 ms (1000 Hz)
-#define STATE_CTRL_VNOM_DEFAULT         24.0f     // Tensão nominal máxima da fonte/motor (V)
-#define STATE_CTRL_VMAX_DEFAULT         24.0f     // Saturação superior (V)
-#define STATE_CTRL_VMIN_DEFAULT        -24.0f     // Saturação inferior (V)
+#define STATE_CTRL_VNOM_DEFAULT         12.0f     // Tensão nominal máxima da fonte/motor (V)
+#define STATE_CTRL_VMAX_DEFAULT         12.0f     // Saturação superior (V)
+#define STATE_CTRL_VMIN_DEFAULT        -12.0f     // Saturação inferior (V)
 
-// Ganhos Kd obtidos a partir dos polos [0.9920, 0.9915, 0.9608]
-// u = r - (Kd1*x1 + Kd2*x2 + Kd3*x3)
-#define STATE_CTRL_KD1_DEFAULT         -13.5407f  // Ganho do estado x1 (Ângulo theta do pêndulo em rad)
-#define STATE_CTRL_KD2_DEFAULT          -1.4895f  // Ganho do estado x2 (Velocidade angular theta_dot em rad/s)
-#define STATE_CTRL_KD3_DEFAULT          -0.5633f  // Ganho do estado x3 (Velocidade angular da roda omega_r em rad/s)
+// Ganhos Kd obtidos a partir dos polos [-52.2083, -4.6407, -0.2471]
+// u = r + (Kd1*x1 + Kd2*x2 + Kd3*x3) -> Sinais de Kd vem negativos do matlab
+#define STATE_CTRL_KD1_DEFAULT         -52.2083f  // Ganho do estado x1 (Ângulo theta do pêndulo em rad)
+#define STATE_CTRL_KD2_DEFAULT          -4.6407f  // Ganho do estado x2 (Velocidade angular theta_dot em rad/s)
+#define STATE_CTRL_KD3_DEFAULT          -0.2471f  // Ganho do estado x3 (Velocidade angular da roda omega_r em rad/s)
 
 // ============================================================================
 // ESTRUTURAS DE DADOS
