@@ -26,9 +26,9 @@ extern "C" {
 // PARÂMETROS PADRÃO DO MODELO DISCRETO E GANHOS (MATLAB / SIMULINK)
 // ============================================================================
 #define STATE_CTRL_TS_DEFAULT           0.001f    // Ts = 1 ms (1000 Hz)
-#define STATE_CTRL_VNOM_DEFAULT         12.0f     // Tensão nominal máxima da fonte/motor (V)
-#define STATE_CTRL_VMAX_DEFAULT         12.0f     // Saturação superior (V)
-#define STATE_CTRL_VMIN_DEFAULT        -12.0f     // Saturação inferior (V)
+#define STATE_CTRL_VNOM_DEFAULT         24.0f     // Tensão nominal máxima da fonte/motor (V)
+#define STATE_CTRL_VMAX_DEFAULT         24.0f     // Saturação superior (V)
+#define STATE_CTRL_VMIN_DEFAULT        -24.0f     // Saturação inferior (V)
 
 // Ganhos Kd obtidos a partir dos polos [-52.2083, -4.6407, -0.2471]
 // u = r + (Kd1*x1 + Kd2*x2 + Kd3*x3) -> Sinais de Kd vem negativos do matlab
