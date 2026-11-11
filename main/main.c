@@ -29,7 +29,7 @@ static const char *TAG = "MAIN_SEC";
 #define RPM_TO_RAD_S   (2.0f * 3.14159265358979323846f / 60.0f)
 
 // Ângulo de corte por segurança (se passar de ±30 graus, desliga o motor)
-#define MAX_RECOVERY_ANGLE_RAD (30.0f * DEG_TO_RAD)
+#define MAX_RECOVERY_ANGLE_RAD (20.0f * DEG_TO_RAD)
 
 // Período da malha de controle em milissegundos
 // Ts = 1 ms (1000 Hz) conforme modelagem no MATLAB
