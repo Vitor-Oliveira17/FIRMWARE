@@ -1,0 +1,20 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.extensionActivationMode": "always",
+  "clangd.path": "C:\\Users\\Joao\\.espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\Joao\\Documents\\Sistemas e Controle\\Firmware SEC\\FIRMWARE_SEC\\build"
+  ],
+  "idf.currentSetup": "C:\\Users\\Joao\\esp\\v6.0\\esp-idf",
+  "idf.flashType": "UART",
+  "idf.openOcdConfigs": [
+    "board/esp32c6-builtin.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32c6",
+    "ADF_PATH": "C:\\Users\\Joao\\.espressif\\esp-adf"
+  },
+  "idf.port": "COM14"
+}
