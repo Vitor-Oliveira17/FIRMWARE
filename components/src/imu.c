@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <math.h>
 
 static const char *TAG = "IMU";
 
@@ -118,7 +119,7 @@ esp_err_t imu_init(void) {
 
     //Configura o DLPF (filtro de hardware da leitura do giroscopio)
     // 0x01 = Bandwidth 184 Hz (Atraso de apenas 2.9 ms)
-    mpu_write_byte(0x1A, 0x01)
+    mpu_write_byte(0x1A, 0x01);
     vTaskDelay(pdMS_TO_TICKS(10));
 
     ESP_LOGI(TAG, "MPU9250 inicializado com sucesso!");
@@ -194,7 +195,23 @@ void i2c_scanner(void) {
     }
 }
 
+
 i2c_master_bus_handle_t imu_get_i2c_bus_handle(void)
 {
     return bus_handle; // Substitua bus_handle pelo nome da sua variável i2c_master_bus_handle_t no imu.c
+}
+
+float imu_read_accel_angle(void) {
+    uint8_t buf[4];
+// Lê Acelerômetro X e Y (Registradores 0x3B até 0x3E no MPU9250)
+    if (mpu_read_bytes(0x3B, buf, 4) != ESP_OK) {
+        return 0.0f;
+    }
+    int16_t ax_raw = (int16_t)((buf[0] << 8) | buf[1]);
+    int16_t ay_raw = (int16_t)((buf[2] << 8) | buf[3]);
+
+// Calcula o ângulo em radianos em relação ao eixo Y (vertical).
+    // Dependendo de qual face do MPU9250 está apontando para cima na sua placa, 
+    // pode ser necessário inverter o sinal do ax_raw ou ay_raw abaixo (ex: -ax_raw).
+    return atan2f((float)ax_raw, (float)ay_raw);
 }

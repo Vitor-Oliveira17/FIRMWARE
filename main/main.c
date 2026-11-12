@@ -39,7 +39,7 @@ static void control_task(void *pvParameters)
 {
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t period_ticks = pdMS_TO_TICKS(CONTROL_LOOP_PERIOD_MS) > 0 ? pdMS_TO_TICKS(CONTROL_LOOP_PERIOD_MS) : 1;
-    static int last_time_us = 0; //Current_time é calculado em us
+    static int64_t last_time_us = 0; //Current_time é calculado em us
     //const float dt = (float)CONTROL_LOOP_PERIOD_MS / 1000.0f; //Divide por 1000 para deixar em segundos
 
     float theta = 0.0f;          // x1: Ângulo do pêndulo em radianos
@@ -64,8 +64,12 @@ static void control_task(void *pvParameters)
         float dt = (float)(current_time_us - last_time_us)/1000000.0f; //us -> s
         last_time_us = current_time_us;
 
-        // Integração do ângulo do pêndulo
-        theta += theta_dot * dt;
+        // Integração do ângulo do pêndulo com filtro
+        // Adiciona filtro complementar
+        float acc_angle = imu_read_accel_angle();
+
+        //Correção com acelerometro (filtro complementar)
+        theta = 0.99f * (theta + (theta_dot * dt)) + 0.01f * acc_angle;
 
         // Leitura do encoder da roda de inércia
         float rpm = encoder_read_rpm(imu_get_i2c_bus_handle());
