@@ -24,8 +24,9 @@ extern "C" {
 // ============================================================================
 #define PID_CTRL_TS_DEFAULT         0.001f    // Ts = 1 ms (1000 Hz)
 #define PID_CTRL_VNOM_DEFAULT       12.0f     // Tensão nominal do motor (V)
-#define PID_CTRL_VMAX_DEFAULT       12.0f     // Saturação superior (V)
-#define PID_CTRL_VMIN_DEFAULT      -12.0f     // Saturação inferior (V)
+#define PID_CTRL_VMAX_DEFAULT       18.0f     // Saturação superior (V)
+#define PID_CTRL_VMIN_DEFAULT      -18.0f     // Saturação inferior (V)
+#define PID_CTRL_VFONTE_DEFAULT     18.0f     // Tensão real da fonte/bateria na ponte H (V)
 
 // Ganhos sintonizados no MATLAB
 #define PID_CTRL_KP_DEFAULT       -109.0f
@@ -41,7 +42,7 @@ typedef struct {
     float kw;         /**< Ganho da realimentação paralela de velocidade da roda */
     float n_filter;   /**< Coeficiente N do filtro passa-baixas da derivada */
     float r;          /**< Referência de ângulo (radianos, padrão 0.0) */
-    float v_nom;      /**< Tensão nominal para conversão PWM (Volts) */
+    float v_fonte;    /**< Tensão real da fonte para conversão PWM (Volts) */
     float v_max;      /**< Saturação máxima (Volts) */
     float v_min;      /**< Saturação mínima (Volts) */
     float ts;         /**< Período de amostragem (s) */

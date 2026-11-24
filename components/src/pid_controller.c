@@ -40,7 +40,7 @@ void pid_controller_init(void)
         .kw       = PID_CTRL_KW_DEFAULT,
         .n_filter = PID_CTRL_N_DEFAULT,
         .r        = 0.0f,
-        .v_nom    = PID_CTRL_VNOM_DEFAULT,
+        .v_fonte  = PID_CTRL_VFONTE_DEFAULT,
         .v_max    = PID_CTRL_VMAX_DEFAULT,
         .v_min    = PID_CTRL_VMIN_DEFAULT,
         .ts       = PID_CTRL_TS_DEFAULT,
@@ -60,8 +60,11 @@ void pid_controller_init_custom(const pid_controller_config_t *cfg)
     pid_controller_reset();
     is_initialized = true;
 
-    ESP_LOGI(TAG, "PID Inicializado | Ts=%.4f s | Kp=%.2f Ki=%.2f Kd=%.2f Kw=%.3f N=%.1f",
-             ctrl_cfg.ts, ctrl_cfg.kp, ctrl_cfg.ki, ctrl_cfg.kd, ctrl_cfg.kw, ctrl_cfg.n_filter);
+    ESP_LOGI(TAG, "PID Inicializado:");
+    ESP_LOGI(TAG, "  Ts: %.4f s | Vfonte: %.1f V | Limites: [%.1f V, %.1f V]",
+             ctrl_cfg.ts, ctrl_cfg.v_fonte, ctrl_cfg.v_min, ctrl_cfg.v_max);
+    ESP_LOGI(TAG, " Kp=%.2f Ki=%.2f Kd=%.2f Kw=%.3f N=%.1f",
+            ctrl_cfg.kp, ctrl_cfg.ki, ctrl_cfg.kd, ctrl_cfg.kw, ctrl_cfg.n_filter);
 }
 
 void pid_controller_set_gains(float kp, float ki, float kd, float kw)
@@ -120,8 +123,8 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
 
     // 8. Conversão de Tensão (V) para Duty Cycle (-255 a +255 do BTS7960)
     float duty_f = 0.0f;
-    if (ctrl_cfg.v_nom > 0.0f) {
-        duty_f = (u_sat / ctrl_cfg.v_nom) * 255.0f;
+    if (ctrl_cfg.v_fonte > 0.0f) {
+        duty_f = (u_sat / ctrl_cfg.v_fonte) * 255.0f;
     }
     int16_t duty = (int16_t)roundf(saturate(duty_f, -255.0f, 255.0f));
 

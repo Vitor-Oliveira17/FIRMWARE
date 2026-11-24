@@ -27,8 +27,9 @@ extern "C" {
 // ============================================================================
 #define STATE_CTRL_TS_DEFAULT           0.001f    // Ts = 1 ms (1000 Hz)
 #define STATE_CTRL_VNOM_DEFAULT         12.0f     // Tensão nominal do motor do modelo (V)
-#define STATE_CTRL_VMAX_DEFAULT         12.0f     // Saturação superior (V)
-#define STATE_CTRL_VMIN_DEFAULT        -12.0f     // Saturação inferior (V)
+#define STATE_CTRL_VMAX_DEFAULT         18.0f     // Saturação superior (V)
+#define STATE_CTRL_VMIN_DEFAULT        -18.0f     // Saturação inferior (V)
+#define STATE_CTRL_VFONTE_DEFAULT       18.0f     // Tensão real da fonte/bateria na ponte H (V)
 
 // Ganhos Kd: polos de malha fechada em z = [0.99900, 0.99601, 0.99501]
 // (continuos -1, -4, -5 rad/s), conferidos com eig(Ad - Bd*Kd).
@@ -66,7 +67,7 @@ typedef struct {
 typedef struct {
     float kd[3];      /**< Ganhos de realimentação [Kd1, Kd2, Kd3] */
     float r;          /**< Referência de ângulo do pêndulo r[k] (radianos, padrão 0.0) */
-    float v_nom;      /**< Tensão nominal para conversão PWM (Volts) */
+    float v_fonte;    /**< Tensão real da fonte para conversão PWM (Volts) */
     float v_max;      /**< Saturação máxima de tensão (Volts) */
     float v_min;      /**< Saturação mínima de tensão (Volts) */
     float ts;         /**< Período de amostragem em segundos */
