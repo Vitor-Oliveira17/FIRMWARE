@@ -36,10 +36,11 @@ void state_controller_init(void)
     state_controller_config_t default_cfg = {
         .kd = { STATE_CTRL_KD1_DEFAULT, STATE_CTRL_KD2_DEFAULT, STATE_CTRL_KD3_DEFAULT },
         .r = 0.0f,
-        .v_nom = STATE_CTRL_VNOM_DEFAULT,
+        .v_fonte = STATE_CTRL_VFONTE_DEFAULT,
         .v_max = STATE_CTRL_VMAX_DEFAULT,
         .v_min = STATE_CTRL_VMIN_DEFAULT,
         .ts = STATE_CTRL_TS_DEFAULT,
+
     };
 
     state_controller_init_custom(&default_cfg);
@@ -56,8 +57,8 @@ void state_controller_init_custom(const state_controller_config_t *cfg)
     is_initialized = true;
 
     ESP_LOGI(TAG, "Controlador Inicializado:");
-    ESP_LOGI(TAG, "  Ts: %.4f s | Vnom: %.1f V | Limites: [%.1f V, %.1f V]",
-             ctrl_cfg.ts, ctrl_cfg.v_nom, ctrl_cfg.v_min, ctrl_cfg.v_max);
+    ESP_LOGI(TAG, "  Ts: %.4f s | Vfonte: %.1f V | Limites: [%.1f V, %.1f V]",
+             ctrl_cfg.ts, ctrl_cfg.v_fonte, ctrl_cfg.v_min, ctrl_cfg.v_max);
     ESP_LOGI(TAG, "  Kd = [%.4f, %.4f, %.4f]",
              ctrl_cfg.kd[0], ctrl_cfg.kd[1], ctrl_cfg.kd[2]);
     ESP_LOGI(TAG, "  Referencia r: %.4f rad", ctrl_cfg.r);
@@ -151,8 +152,8 @@ int16_t state_controller_update(const state_vector_t *x, state_controller_output
 
     // 3. Mapeamento de Tensão (V) para Duty Cycle (-255 a +255 do BTS7960)
     float duty_f = 0.0f;
-    if (ctrl_cfg.v_nom > 0.0f) {
-        duty_f = (u_sat / ctrl_cfg.v_nom) * 255.0f;
+    if (ctrl_cfg.v_fonte > 0.0f) {
+        duty_f = (u_sat / ctrl_cfg.v_fonte) * 255.0f;
     }
 
     int16_t duty = (int16_t)roundf(saturate(duty_f, -255.0f, 255.0f));
