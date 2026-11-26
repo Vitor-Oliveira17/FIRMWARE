@@ -17,7 +17,6 @@ static float ek_1  = 0.0f;
 static float uik_1 = 0.0f;
 static float udk_1 = 0.0f;
 
-/// Predição velocidade
 // Discretização ZOH do modelo em paramEncomendadoc.m para Ts = 1 ms.
 static const pid_space_model_t discrete_model = {
     .ad = {
@@ -30,43 +29,6 @@ static const pid_space_model_t discrete_model = {
     .dd = 0.0f,
 };
 
-void pid_controller_get_model(pid_space_model_t *out_model)
-{
-    if (out_model != NULL) {
-        *out_model = discrete_model;
-    }
-}
-
-void pid_controller_predict(const pid_state_vector_t *x, float voltage,
-                            pid_state_vector_t *next_state, float *output)
-{
-    if (x == NULL) {
-        return;
-    }
-
-    const float state[3] = {x->theta, x->theta_dot, x->omega_r};
-    float next[3] = {0.0f, 0.0f, 0.0f};
-    float y = discrete_model.dd * voltage;
-
-    for (int row = 0; row < 3; row++) {
-        for (int col = 0; col < 3; col++) {
-            next[row] += discrete_model.ad[row][col] * state[col];
-        }
-        next[row] += discrete_model.bd[row] * voltage;
-        y += discrete_model.cd[row] * state[row];
-    }
-
-    if (next_state != NULL) {
-        next_state->theta = next[0];
-        next_state->theta_dot = next[1];
-        next_state->omega_r = next[2];
-    }
-    if (output != NULL) {
-        *output = y;
-    }
-}
-
-//PID
 static inline float saturate(float val, float min_val, float max_val)
 {
     if (val > max_val) return max_val;
@@ -148,18 +110,57 @@ void pid_controller_get_config(pid_controller_config_t *out_cfg)
     }
 }
 
+void pid_controller_get_model(pid_space_model_t *out_model)
+{
+    if (out_model != NULL) {
+        *out_model = discrete_model;
+    }
+}
 
-int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_t *out)
+void pid_controller_predict(const pid_state_vector_t *x, float voltage,
+                            pid_state_vector_t *next_state, float *output)
+{
+    if (x == NULL) {
+        return;
+    }
+
+    const float state[3] = {x->theta, x->theta_dot, x->omega_r};
+    float next[3] = {0.0f, 0.0f, 0.0f};
+    float y = discrete_model.dd * voltage;
+
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            next[row] += discrete_model.ad[row][col] * state[col];
+        }
+        next[row] += discrete_model.bd[row] * voltage;
+        y += discrete_model.cd[row] * state[row];
+    }
+
+    if (next_state != NULL) {
+        next_state->theta = next[0];
+        next_state->theta_dot = next[1];
+        next_state->omega_r = next[2];
+    }
+    if (output != NULL) {
+        *output = y;
+    }
+}
+
+int16_t pid_controller_update(const pid_state_vector_t *x, pid_controller_output_t *out)
 {
     if (!is_initialized) {
         pid_controller_init();
     }
 
+    if (x == NULL) {
+        return 0;
+    }
+
     const float ts = ctrl_cfg.ts;
     const float n  = ctrl_cfg.n_filter;
 
-    // 1. Erro angular: e[k] = r[k] - theta[k]
-    float ek = ctrl_cfg.r - theta;
+    // 1. Erro angular: e[k] = r[k] - x1[k]
+    float ek = ctrl_cfg.r - x->theta;
 
     // 2. Termo Proporcional
     float upk = ctrl_cfg.kp * ek;
@@ -176,7 +177,7 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
 
     // 5. Soma do PID + Realimentação paralela da velocidade da roda (somador "+-")
     float u_pid = upk + uik + udk;
-    float u_raw = u_pid - (ctrl_cfg.kw * omega_r);
+    float u_raw = u_pid - (ctrl_cfg.kw * x->omega_r);
 
     // 6. Bloco de Saturação de Tensão (Tensão máxima suportada pelo motor / bateria)
     float u_sat = saturate(u_raw, ctrl_cfg.v_min, ctrl_cfg.v_max);
@@ -196,6 +197,7 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
     if (ctrl_cfg.v_nom > 0.0f) {
         duty_f = (u_sat / ctrl_cfg.v_nom) * 255.0f;
     }
+
     int16_t duty = (int16_t)roundf(saturate(duty_f, -255.0f, 255.0f));
 
     // 9. Preenche as saídas caso o ponteiro tenha sido fornecido
@@ -203,6 +205,8 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
         out->u_raw   = u_raw;
         out->voltage = u_sat;
         out->duty    = duty;
+        pid_controller_predict(x, u_sat, &out->predicted_state,
+                               &out->predicted_output);
     }
 
     return duty;
