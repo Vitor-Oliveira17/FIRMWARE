@@ -32,8 +32,8 @@ static const char *TAG = "PWM_TEST";
 // ============================================================================
 // CONFIGURACAO (ajuste aqui conforme a ligacao)
 // ============================================================================
-#define PIN_RPWM            12      // RPWM do BTS7960
-#define PIN_LPWM            13      // LPWM do BTS7960
+#define PIN_RPWM            23      // RPWM do BTS7960
+#define PIN_LPWM            20      // LPWM do BTS7960
 #define PIN_REN             5       // R_EN do BTS7960
 #define PIN_LEN             7       // L_EN do BTS7960
 
@@ -82,7 +82,7 @@ static void stop_and_wait(void)
 
 static void hw_init(void)
 {
-    // Libera GPIO12/13 da funcao USB e remove pull-ups/pull-downs internos.
+    // Reseta os pinos e remove pull-ups/pull-downs internos.
     const int pwm_pins[] = {PIN_RPWM, PIN_LPWM};
     for (int i = 0; i < 2; i++) {
         gpio_reset_pin(pwm_pins[i]);

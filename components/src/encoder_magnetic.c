@@ -3,6 +3,8 @@
 #include "esp_timer.h" // Necessário para pegar o tempo em microsegundos
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "imu.h"        // IMU_USE_SOFT_I2C
+#include "soft_i2c.h"
 
 static const char *TAG = "ENCODER_MAG";
 static i2c_master_dev_handle_t dev_handle = NULL;
@@ -18,8 +20,16 @@ static esp_err_t last_error = ESP_OK;
 
 static esp_err_t ensure_device(i2c_master_bus_handle_t bus_handle)
 {
+#if IMU_USE_SOFT_I2C
+    // I2C por software: o barramento e o mesmo da IMU, ja inicializado por imu_init().
+    (void)bus_handle;
+    return ESP_OK;
+#else
     if (dev_handle != NULL) {
         return ESP_OK;
+    }
+    if (bus_handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -27,17 +37,26 @@ static esp_err_t ensure_device(i2c_master_bus_handle_t bus_handle)
         .scl_speed_hz = 400000,
     };
     return i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle);
+#endif
+}
+
+static esp_err_t read_regs_timeout(uint8_t reg, uint8_t *data, size_t len, int timeout_ms)
+{
+#if IMU_USE_SOFT_I2C
+    (void)timeout_ms;
+    return soft_i2c_read_regs(AS5600_ADDR, reg, data, len);
+#else
+    return i2c_master_transmit_receive(dev_handle, &reg, 1, data, len, timeout_ms);
+#endif
 }
 
 static esp_err_t read_regs(uint8_t reg, uint8_t *data, size_t len)
 {
-    return i2c_master_transmit_receive(dev_handle, &reg, 1, data, len, 50);
+    return read_regs_timeout(reg, data, len, 50);
 }
 
 float encoder_read_angle(i2c_master_bus_handle_t bus_handle)
 {
-    if (bus_handle == NULL) return -1.0f;
-
     esp_err_t err = ensure_device(bus_handle);
     if (err != ESP_OK) {
         last_error = err;
@@ -47,8 +66,7 @@ float encoder_read_angle(i2c_master_bus_handle_t bus_handle)
     uint8_t reg = AS5600_ANGLE;
     uint8_t data[2] = {0};
 
-    err = i2c_master_transmit_receive(dev_handle, &reg, 1, data, 2,
-                                      AS5600_I2C_TIMEOUT_MS);
+    err = read_regs_timeout(reg, data, 2, AS5600_I2C_TIMEOUT_MS);
     if (err != ESP_OK) {
         last_error = err;
         return -1.0f;
@@ -124,17 +142,21 @@ esp_err_t encoder_get_last_error(void)
 esp_err_t encoder_diagnose(i2c_master_bus_handle_t bus_handle)
 {
     ESP_LOGW(TAG, "===== DIAGNOSTICO AS5600 =====");
+    // 1. O chip responde no endereco 0x36?
+#if IMU_USE_SOFT_I2C
+    (void)bus_handle;
+    esp_err_t err = soft_i2c_probe(AS5600_ADDR);
+#else
     if (bus_handle == NULL) {
         ESP_LOGE(TAG, "Barramento I2C nao inicializado.");
         return ESP_ERR_INVALID_STATE;
     }
-
-    // 1. O chip responde no endereco 0x36?
     esp_err_t err = i2c_master_probe(bus_handle, AS5600_ADDR, 50);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "AS5600 NAO responde em 0x%02X (%s).", AS5600_ADDR, esp_err_to_name(err));
         ESP_LOGE(TAG, "-> Problema de LIGACAO: confira SDA(GPIO%d) SCL(GPIO%d), VCC 3.3V e GND do AS5600.",
-                 21, 22);
+                 IMU_I2C_SDA_PIN, IMU_I2C_SCL_PIN);
         return err;
     }
     ESP_LOGI(TAG, "AS5600 respondeu em 0x%02X.", AS5600_ADDR);

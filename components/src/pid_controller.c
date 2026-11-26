@@ -17,6 +17,56 @@ static float ek_1  = 0.0f;
 static float uik_1 = 0.0f;
 static float udk_1 = 0.0f;
 
+/// Predição velocidade
+// Discretização ZOH do modelo em paramEncomendadoc.m para Ts = 1 ms.
+static const pid_space_model_t discrete_model = {
+    .ad = {
+        { 1.0000412089f,  0.0009998727f,  0.0000002317f },
+        { 0.0824081770f,  0.9997591726f,  0.0004631878f },
+        {-0.0822831421f,  0.0002404412f,  0.9965048795f },
+    },
+    .bd = {-0.0000010024f, -0.0020034734f, 0.0151178009f},
+    .cd = {1.0f, 0.0f, 0.0f},
+    .dd = 0.0f,
+};
+
+void pid_controller_get_model(pid_space_model_t *out_model)
+{
+    if (out_model != NULL) {
+        *out_model = discrete_model;
+    }
+}
+
+void pid_controller_predict(const pid_state_vector_t *x, float voltage,
+                            pid_state_vector_t *next_state, float *output)
+{
+    if (x == NULL) {
+        return;
+    }
+
+    const float state[3] = {x->theta, x->theta_dot, x->omega_r};
+    float next[3] = {0.0f, 0.0f, 0.0f};
+    float y = discrete_model.dd * voltage;
+
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            next[row] += discrete_model.ad[row][col] * state[col];
+        }
+        next[row] += discrete_model.bd[row] * voltage;
+        y += discrete_model.cd[row] * state[row];
+    }
+
+    if (next_state != NULL) {
+        next_state->theta = next[0];
+        next_state->theta_dot = next[1];
+        next_state->omega_r = next[2];
+    }
+    if (output != NULL) {
+        *output = y;
+    }
+}
+
+//PID
 static inline float saturate(float val, float min_val, float max_val)
 {
     if (val > max_val) return max_val;
@@ -40,7 +90,7 @@ void pid_controller_init(void)
         .kw       = PID_CTRL_KW_DEFAULT,
         .n_filter = PID_CTRL_N_DEFAULT,
         .r        = 0.0f,
-        .v_fonte  = PID_CTRL_VFONTE_DEFAULT,
+        .v_nom    = PID_CTRL_VNOM_DEFAULT,
         .v_max    = PID_CTRL_VMAX_DEFAULT,
         .v_min    = PID_CTRL_VMIN_DEFAULT,
         .ts       = PID_CTRL_TS_DEFAULT,
@@ -60,11 +110,12 @@ void pid_controller_init_custom(const pid_controller_config_t *cfg)
     pid_controller_reset();
     is_initialized = true;
 
-    ESP_LOGI(TAG, "PID Inicializado:");
-    ESP_LOGI(TAG, "  Ts: %.4f s | Vfonte: %.1f V | Limites: [%.1f V, %.1f V]",
-             ctrl_cfg.ts, ctrl_cfg.v_fonte, ctrl_cfg.v_min, ctrl_cfg.v_max);
-    ESP_LOGI(TAG, " Kp=%.2f Ki=%.2f Kd=%.2f Kw=%.3f N=%.1f",
-            ctrl_cfg.kp, ctrl_cfg.ki, ctrl_cfg.kd, ctrl_cfg.kw, ctrl_cfg.n_filter);
+    ESP_LOGI(TAG, "Controlador Inicializado:");
+    ESP_LOGI(TAG, "  Ts: %.4f s | Vnom: %.1f V | Limites: [%.1f V, %.1f V]",
+             ctrl_cfg.ts, ctrl_cfg.v_nom, ctrl_cfg.v_min, ctrl_cfg.v_max);
+    ESP_LOGI(TAG, "  Kp=%.4f Ki=%.4f Kd=%.4f Kw=%.4f N=%.1f",
+             ctrl_cfg.kp, ctrl_cfg.ki, ctrl_cfg.kd, ctrl_cfg.kw, ctrl_cfg.n_filter);
+    ESP_LOGI(TAG, "  Referencia r: %.4f rad", ctrl_cfg.r);
 }
 
 void pid_controller_set_gains(float kp, float ki, float kd, float kw)
@@ -72,12 +123,31 @@ void pid_controller_set_gains(float kp, float ki, float kd, float kw)
     if (!is_initialized) {
         pid_controller_init();
     }
+
     ctrl_cfg.kp = kp;
     ctrl_cfg.ki = ki;
     ctrl_cfg.kd = kd;
     ctrl_cfg.kw = kw;
     pid_controller_reset();
+    ESP_LOGI(TAG, "Novos Ganhos: Kp=%.4f Ki=%.4f Kd=%.4f Kw=%.4f", kp, ki, kd, kw);
 }
+
+void pid_controller_set_reference(float reference_rad)
+{
+    if (!is_initialized) {
+        pid_controller_init();
+    }
+
+    ctrl_cfg.r = reference_rad;
+}
+
+void pid_controller_get_config(pid_controller_config_t *out_cfg)
+{
+    if (out_cfg) {
+        *out_cfg = ctrl_cfg;
+    }
+}
+
 
 int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_t *out)
 {
@@ -108,7 +178,7 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
     float u_pid = upk + uik + udk;
     float u_raw = u_pid - (ctrl_cfg.kw * omega_r);
 
-    // 6. Saturação de tensão (+-12V)
+    // 6. Bloco de Saturação de Tensão (Tensão máxima suportada pelo motor / bateria)
     float u_sat = saturate(u_raw, ctrl_cfg.v_min, ctrl_cfg.v_max);
 
     // Anti-windup (Clamping): congela o integrador se houver saturação e Ki != 0
@@ -121,13 +191,14 @@ int16_t pid_controller_update(float theta, float omega_r, pid_controller_output_
     uik_1 = uik;
     udk_1 = udk;
 
-    // 8. Conversão de Tensão (V) para Duty Cycle (-255 a +255 do BTS7960)
+    // 8. Mapeamento de Tensão (V) para Duty Cycle (-255 a +255 do BTS7960)
     float duty_f = 0.0f;
-    if (ctrl_cfg.v_fonte > 0.0f) {
-        duty_f = (u_sat / ctrl_cfg.v_fonte) * 255.0f;
+    if (ctrl_cfg.v_nom > 0.0f) {
+        duty_f = (u_sat / ctrl_cfg.v_nom) * 255.0f;
     }
     int16_t duty = (int16_t)roundf(saturate(duty_f, -255.0f, 255.0f));
 
+    // 9. Preenche as saídas caso o ponteiro tenha sido fornecido
     if (out != NULL) {
         out->u_raw   = u_raw;
         out->voltage = u_sat;

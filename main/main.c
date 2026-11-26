@@ -7,6 +7,7 @@
  *   SEC_MODE_SENSORS    -> mesma leitura de sensores, motor SEMPRE desligado
  *                          (use para conferir sinais e o zero do angulo)
  *   SEC_MODE_MOTOR_TEST -> teste em malha aberta do motor + encoder
+ *   SEC_MODE_PIN_TEST   -> pinos da ponte em nivel fixo, sem PWM nem IMU
  */
 
 #include <math.h>
@@ -16,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -24,9 +26,8 @@
 #include "motor.h"
 #include "motor_test.h"
 #include "pid_controller.h"
-#include "state_controller.h" // Mantido para o estimador de omega_r quando USE_ENCODER == 0
 
-static const char *TAG = "MAIN_PID";
+static const char *TAG = "MAIN_SEC";
 
 // ============================================================================
 // MODO DE OPERACAO
@@ -34,8 +35,9 @@ static const char *TAG = "MAIN_PID";
 #define SEC_MODE_BALANCE            0
 #define SEC_MODE_SENSORS            1
 #define SEC_MODE_MOTOR_TEST         2
+#define SEC_MODE_PIN_TEST           3   // liga/desliga os pinos da ponte (multimetro)
 
-#define SEC_MODE                    SEC_MODE_BALANCE
+#define SEC_MODE                    SEC_MODE_BALANCE   // altere aqui para mudar o modo de operacao
 
 // ============================================================================
 // SINAIS E ZERO (ajustar conforme o procedimento de verificacao)
@@ -53,12 +55,16 @@ static const char *TAG = "MAIN_PID";
 // ============================================================================
 // 0 -> SEM ENCODER: omega_r estimado pelo modelo discreto a partir da tensao
 //      aplicada (omega[k+1] = Ad[2]*x[k] + Bd[2]*u[k]). O AS5600 nao e lido.
+//      Estavel no modelo enquanto o ganho real do motor for >= ~0.8x o do modelo.
 // 1 -> COM ENCODER: omega_r medido pelo AS5600 (I2C).
 #define USE_ENCODER                 0
+
 
 // ============================================================================
 // FILTROS, SEGURANCA E TEMPORIZACAO
 // ============================================================================
+// Filtro passa-baixas (EMA) da velocidade da roda. Com Ts = 1 ms, 1 LSB do
+// AS5600 equivale a ~1.5 rad/s; alpha = 0.2 -> fc ~ 36 Hz.
 #define OMEGA_EMA_ALPHA             0.2f
 
 #define ARM_ANGLE_DEG               2.0f    // arma so se |theta| < 2 graus...
@@ -94,6 +100,10 @@ typedef struct {
 
 static QueueHandle_t log_queue;
 
+/**
+ * Tarefa de baixa prioridade: imprimir na UART leva ~20 ms por linha a
+ * 115200 baud, por isso o log nunca e feito dentro da malha de 1 kHz.
+ */
 static void log_task(void *pv_parameters)
 {
     (void)pv_parameters;
@@ -163,7 +173,7 @@ static void control_task(void *pv_parameters)
     int64_t last_cycle_start_us = esp_timer_get_time();
     int64_t max_cycle_period_us = 0;
 
-    ESP_LOGI(TAG, "Malha PID ativa (Ts = %d ms). Modo: %s | omega_r: %s", CONTROL_LOOP_PERIOD_MS,
+    ESP_LOGI(TAG, "Malha ativa (Ts = %d ms). Modo: %s | omega_r: %s", CONTROL_LOOP_PERIOD_MS,
              balance_mode ? "EQUILIBRIO" : "SOMENTE SENSORES (motor desligado)",
              USE_ENCODER ? "ENCODER AS5600" : "ESTIMADO PELO MODELO (sem encoder)");
     if (balance_mode) {
@@ -217,17 +227,22 @@ static void control_task(void *pv_parameters)
                     if (++arm_counter >= arm_hold_cycles) {
                         armed = true;
                         sat_counter = 0;
-                        pid_controller_reset(); // Garante integrador e derivada zerados no inicio
-                        status = "ARMADO-PID";
+                        pid_controller_reset();
+                        status = "ARMADO";
                     }
                 } else {
                     arm_counter = 0;
                 }
 
-                // ---------------- Lei de controle PID + Kw ----------------
+                // ---------------- Lei de controle ----------------
                 if (armed) {
+                    const pid_state_vector_t state = {
+                        .theta = theta,
+                        .theta_dot = theta_dot,
+                        .omega_r = omega_f,
+                    };
                     pid_controller_output_t out;
-                    const int16_t ctrl_duty = pid_controller_update(theta, omega_f, &out);
+                    const int16_t ctrl_duty = pid_controller_update(&state, &out);
 
                     if (out.u_raw != out.voltage) {
                         sat_counter++;
@@ -258,15 +273,16 @@ static void control_task(void *pv_parameters)
         // Estimador de omega_r pelo modelo: propaga a 3a linha da planta discreta
         // com a tensao realmente aplicada (0 V quando desarmado).
         {
-            const state_vector_t x_now = {
+            const pid_state_vector_t x_now = {
                 .theta = theta,
                 .theta_dot = theta_dot,
                 .omega_r = omega_f,
             };
-            state_vector_t x_next;
-            state_controller_predict(&x_now, voltage, &x_next, NULL);
+            pid_state_vector_t x_next;
+            pid_controller_predict(&x_now, voltage, &x_next, NULL);
             omega_f = isfinite(x_next.omega_r) ? x_next.omega_r : 0.0f;
             if (!armed) {
+                // Desarmado: a ponte freia a roda; zera a estimativa.
                 omega_f = 0.0f;
             }
         }
@@ -300,13 +316,71 @@ static void control_task(void *pv_parameters)
             max_cycle_period_us = 0;
         }
 
-        vTaskDelayUntil(&last_wake_time, period_ticks);
+        // Se o ciclo estourou o periodo, xTaskDelayUntil retorna sem bloquear.
+        // Nesse caso cede 1 tick para a tarefa IDLE nao disparar o watchdog.
+        if (xTaskDelayUntil(&last_wake_time, period_ticks) == pdFALSE) {
+            vTaskDelay(1);
+            last_wake_time = xTaskGetTickCount();
+        }
     }
 }
+
+#if SEC_MODE == SEC_MODE_PIN_TEST
+/**
+ * Teste dos pinos da ponte sem PWM, sem timer e sem IMU.
+ * Alterna os quatro pinos entre 3.3 V e 0 V a cada 3 s e le de volta o nivel
+ * real de cada pino. Meça com o multimetro entre o pino e o GND.
+ */
+static void pin_test(void)
+{
+    const int pins[] = {25, 26, 32, 33};
+    const char *names[] = {"RPWM(GPIO25)", "LPWM(GPIO26)", "R_EN(GPIO32)", "L_EN(GPIO33)"};
+    uint64_t mask = 0;
+    for (int i = 0; i < 4; i++) {
+        gpio_reset_pin(pins[i]);
+        mask |= 1ULL << pins[i];
+    }
+    gpio_config_t c = {
+        .pin_bit_mask = mask,
+        .mode = GPIO_MODE_INPUT_OUTPUT,   // saida com leitura de volta do pino
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&c);
+
+    ESP_LOGW(TAG, "=== TESTE DE PINOS DA PONTE (sem PWM) ===");
+    ESP_LOGW(TAG, "Desconecte a bateria de 12 V da ponte para este teste.");
+    int level = 1;
+    while (true) {
+        for (int i = 0; i < 4; i++) {
+            gpio_set_level(pins[i], level);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+        for (int i = 0; i < 4; i++) {
+            const int read = gpio_get_level(pins[i]);
+            if (read == level) {
+                ESP_LOGI(TAG, "%-13s comandado=%d  lido=%d  OK  (meca %s)",
+                         names[i], level, read, level ? "~3.3 V" : "~0 V");
+            } else {
+                ESP_LOGE(TAG, "%-13s comandado=%d  lido=%d  <- PINO NAO OBEDECE (curto ou danificado)",
+                         names[i], level, read);
+            }
+        }
+        ESP_LOGW(TAG, "---- mantendo %s por 3 s ----", level ? "3.3 V" : "0 V");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        level = !level;
+    }
+}
+#endif
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "Firmware SEC: controle por PID discreto em paralelo");
+
+#if SEC_MODE == SEC_MODE_PIN_TEST
+    pin_test();   // nao retorna
+#endif
 
     motor_init();
     motor_set_speed(0);
@@ -317,10 +391,13 @@ void app_main(void)
     }
 
 #if USE_ENCODER
+    // Diagnostico do barramento I2C e do encoder (deve listar 0x36 e 0x68).
     i2c_scanner();
     encoder_diagnose(imu_get_i2c_bus_handle());
 #endif
 
+    // O zero de theta e a postura do robo durante a calibracao e no inicio da
+    // malha. Segure-o no ponto de equilibrio ate aparecer "Malha ativa".
     for (int s = CALIB_COUNTDOWN_S; s > 0; s--) {
         ESP_LOGW(TAG, "Segure o robo PARADO no ponto de equilibrio... %d", s);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -341,9 +418,6 @@ void app_main(void)
 #endif
 
     pid_controller_init();
-#if !USE_ENCODER
-    state_controller_init(); // Necessario apenas se usar state_controller_predict()
-#endif
 
     log_queue = xQueueCreate(1, sizeof(sec_snapshot_t));
     if (log_queue == NULL ||

@@ -1,6 +1,6 @@
 /**
  * @file imu.c
- * @brief Implementação do Driver MPU-6050 via I2C
+ * @brief Implementação do Driver MPU-6500 via I2C
  */
 
 #include "imu.h"
@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "soft_i2c.h"
 
 static const char *TAG = "IMU";
 
@@ -18,6 +19,29 @@ static const char *TAG = "IMU";
 
 static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t dev_handle;
+static bool soft_ready = false;   // I2C por software inicializado
+
+static bool imu_ready(void)
+{
+#if IMU_USE_SOFT_I2C
+    return soft_ready;
+#else
+    return dev_handle != NULL;
+#endif
+}
+
+/** Libera o barramento apos falha na identificacao. */
+static void imu_release(void)
+{
+#if IMU_USE_SOFT_I2C
+    soft_ready = false;
+#else
+    i2c_master_bus_rm_device(dev_handle);
+    i2c_del_master_bus(bus_handle);
+    dev_handle = NULL;
+    bus_handle = NULL;
+#endif
+}
 
 // Offset de fábrica do giroscópio (calculado na calibração)
 static float gyroZ_offset = 0.0f;
@@ -43,15 +67,24 @@ static float gyro_moving_average(float new_sample) {
 }
 
 static esp_err_t mpu_write_byte(uint8_t reg_addr, uint8_t data) {
+#if IMU_USE_SOFT_I2C
+    if (!soft_ready) return ESP_ERR_INVALID_STATE;
+    return soft_i2c_write_reg(MPU_ADDR, reg_addr, data);
+#else
     uint8_t write_buf[2] = {reg_addr, data};
     return i2c_master_transmit(dev_handle, write_buf, sizeof(write_buf), I2C_MASTER_TIMEOUT_MS);
+#endif
 }
 
 static esp_err_t mpu_read_bytes(uint8_t reg_addr, uint8_t *data, size_t len) {
-    if (dev_handle == NULL || data == NULL || len == 0) {
+    if (!imu_ready() || data == NULL || len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+#if IMU_USE_SOFT_I2C
+    return soft_i2c_read_regs(MPU_ADDR, reg_addr, data, len);
+#else
     return i2c_master_transmit_receive(dev_handle, &reg_addr, 1, data, len, I2C_MASTER_TIMEOUT_MS);
+#endif
 }
 
 static float wrap_angle_rad(float angle)
@@ -66,8 +99,26 @@ static float wrap_angle_rad(float angle)
 }
 
 esp_err_t imu_init(void) {
-    ESP_LOGI(TAG, "Inicializando I2C e MPU6050...");
+    ESP_LOGI(TAG, "Inicializando I2C e MPU6500...");
 
+#if IMU_USE_SOFT_I2C
+    if (soft_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = soft_i2c_init(IMU_I2C_SDA_PIN, IMU_I2C_SCL_PIN, IMU_SOFT_I2C_HALF_PERIOD_NS);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao configurar I2C por software: %s", esp_err_to_name(err));
+        return err;
+    }
+    int sda_lvl = 0, scl_lvl = 0;
+    soft_i2c_read_lines(&sda_lvl, &scl_lvl);
+    ESP_LOGI(TAG, "I2C POR SOFTWARE em SDA=GPIO%d SCL=GPIO%d (meio periodo %d ns) | linhas SDA=%d SCL=%d",
+             IMU_I2C_SDA_PIN, IMU_I2C_SCL_PIN, IMU_SOFT_I2C_HALF_PERIOD_NS, sda_lvl, scl_lvl);
+    if (!sda_lvl || !scl_lvl) {
+        ESP_LOGE(TAG, "Linha I2C presa em 0: curto, IMU danificada ou pino do ESP danificado.");
+    }
+    soft_ready = true;
+#else
     if (bus_handle != NULL || dev_handle != NULL) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -93,37 +144,61 @@ esp_err_t imu_init(void) {
     };
     err = i2c_master_bus_add_device(bus_handle, &dev_config, &dev_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao adicionar MPU6050: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Falha ao adicionar MPU6500: %s", esp_err_to_name(err));
         i2c_del_master_bus(bus_handle);
         bus_handle = NULL;
         return err;
     }
 
+#endif
+
     uint8_t who_am_i = 0;
     err = mpu_read_bytes(0x75, &who_am_i, 1);
-    if (err != ESP_OK || who_am_i != MPU_ADDR) {
-        ESP_LOGE(TAG, "MPU6050 nao identificado (WHO_AM_I=0x%02X, erro=%s)",
-                 who_am_i, esp_err_to_name(err));
-        i2c_master_bus_rm_device(dev_handle);
-        i2c_del_master_bus(bus_handle);
-        dev_handle = NULL;
-        bus_handle = NULL;
-        return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
-    }
-    ESP_LOGI(TAG, "WHO_AM_I = 0x%02X (esperado: 0x68 para MPU6050)", who_am_i);
-
-    err = mpu_write_byte(0x6B, 0x00);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao acordar MPU6050: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "MPU6500 nao respondeu no I2C (erro=%s). Confira SDA/SCL, VCC, GND "
+                 "e NCS ligado ao VCC.", esp_err_to_name(err));
+        imu_release();
+        return err;
+    }
+    if (who_am_i == IMU_WHO_AM_I_MPU6500) {
+        ESP_LOGI(TAG, "WHO_AM_I = 0x%02X (MPU6500)", who_am_i);
+    } else if (who_am_i == 0x68 || who_am_i == 0x71 || who_am_i == 0x73) {
+        // MPU-6050 / MPU-9250 / MPU-9255: mesmo mapa de registradores usado aqui.
+        ESP_LOGW(TAG, "WHO_AM_I = 0x%02X: nao e MPU6500, mas e compativel. Continuando.",
+                 who_am_i);
+    } else {
+        ESP_LOGE(TAG, "Sensor nao identificado (WHO_AM_I=0x%02X, esperado 0x%02X para MPU6500)",
+                 who_am_i, IMU_WHO_AM_I_MPU6500);
+        imu_release();
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Reset completo do chip (PWR_MGMT_1, bit DEVICE_RESET) e espera estabilizar.
+    err = mpu_write_byte(0x6B, 0x80);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao resetar MPU6500: %s", esp_err_to_name(err));
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Acorda e usa o PLL do giroscopio como clock (CLKSEL = 1, mais estavel).
+    err = mpu_write_byte(0x6B, 0x01);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao acordar MPU6500: %s", esp_err_to_name(err));
+        return err;
+    }
+    // Liga todos os eixos do acelerometro e do giroscopio (PWR_MGMT_2).
+    err = mpu_write_byte(0x6C, 0x00);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao habilitar eixos: %s", esp_err_to_name(err));
         return err;
     }
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // Filtro passa-baixas digital interno (CONFIG, 0x1A) e taxa de amostragem
-    // (SMPLRT_DIV, 0x19). Ver tabela em imu.h.
+    // Filtro do giroscopio (CONFIG, 0x1A) e taxa de amostragem (SMPLRT_DIV, 0x19).
     err = mpu_write_byte(0x1A, IMU_DLPF_CFG & 0x07);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao configurar DLPF: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Falha ao configurar DLPF do giroscopio: %s", esp_err_to_name(err));
         return err;
     }
     err = mpu_write_byte(0x19, IMU_SMPLRT_DIV);
@@ -132,25 +207,34 @@ esp_err_t imu_init(void) {
         return err;
     }
 
-    // Giroscopio +-250 deg/s (131 LSB/(deg/s)) e acelerometro +-2 g (16384 LSB/g).
+    // Giroscopio +-250 deg/s (131 LSB/(deg/s)); FCHOICE_B = 00 -> usa o DLPF acima.
     err = mpu_write_byte(0x1B, 0x00);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao configurar giroscopio: %s", esp_err_to_name(err));
         return err;
     }
+    // Acelerometro +-2 g (16384 LSB/g).
     err = mpu_write_byte(0x1C, 0x00);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao configurar acelerometro: %s", esp_err_to_name(err));
         return err;
     }
+    // Filtro do acelerometro (ACCEL_CONFIG2, 0x1D) - exclusivo do MPU-6500.
+    err = mpu_write_byte(0x1D, IMU_ACCEL_DLPF_CFG & 0x07);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao configurar DLPF do acelerometro: %s", esp_err_to_name(err));
+        return err;
+    }
 
-    uint8_t dlpf_readback = 0xFF;
-    if (mpu_read_bytes(0x1A, &dlpf_readback, 1) == ESP_OK) {
-        ESP_LOGI(TAG, "DLPF_CFG = %u (configurado: %d)", dlpf_readback & 0x07, IMU_DLPF_CFG);
+    uint8_t gyro_dlpf = 0xFF, accel_dlpf = 0xFF;
+    if (mpu_read_bytes(0x1A, &gyro_dlpf, 1) == ESP_OK &&
+        mpu_read_bytes(0x1D, &accel_dlpf, 1) == ESP_OK) {
+        ESP_LOGI(TAG, "DLPF giroscopio = %u (configurado %d) | DLPF acelerometro = %u (configurado %d)",
+                 gyro_dlpf & 0x07, IMU_DLPF_CFG, accel_dlpf & 0x07, IMU_ACCEL_DLPF_CFG);
     }
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ESP_LOGI(TAG, "MPU6050 inicializado com sucesso!");
+    ESP_LOGI(TAG, "MPU6500 inicializado com sucesso!");
     return ESP_OK;
 }
 
@@ -221,7 +305,7 @@ float imu_read_gyro_z(void) {
 esp_err_t imu_read_accel(float *ax, float *ay, float *az) {
     uint8_t buf[6];
 
-    if (ax == NULL || ay == NULL || az == NULL || dev_handle == NULL) {
+    if (ax == NULL || ay == NULL || az == NULL || !imu_ready()) {
         return ESP_ERR_INVALID_ARG;
     }
     if (mpu_read_bytes(0x3B, buf, 6) != ESP_OK) {
@@ -283,7 +367,7 @@ esp_err_t imu_read_state(float dt, float *angle_rad, float *gyro_z_deg_s,
                          float *ax_g, float *ay_g, float *az_g)
 {
     if (angle_rad == NULL || gyro_z_deg_s == NULL || ax_g == NULL ||
-        ay_g == NULL || az_g == NULL || dev_handle == NULL) {
+        ay_g == NULL || az_g == NULL || !imu_ready()) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -309,13 +393,22 @@ esp_err_t imu_read_state(float dt, float *angle_rad, float *gyro_z_deg_s,
 }
 
 void i2c_scanner(void) {
+#if IMU_USE_SOFT_I2C
+    if (!soft_ready) return;
+#else
     if (bus_handle == NULL) return;
+#endif
 
     ESP_LOGI("SCANNER", "Iniciando varredura I2C...");
     int encontrados = 0;
 
     for (uint8_t addr = 1; addr < 127; addr++) {
-        if (i2c_master_probe(bus_handle, addr, 100) == ESP_OK) {
+#if IMU_USE_SOFT_I2C
+        const esp_err_t found = soft_i2c_probe(addr);
+#else
+        const esp_err_t found = i2c_master_probe(bus_handle, addr, 100);
+#endif
+        if (found == ESP_OK) {
             ESP_LOGI("SCANNER", "Dispositivo encontrado no endereco: 0x%02X", addr);
             encontrados++;
         }

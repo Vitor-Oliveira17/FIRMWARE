@@ -9,12 +9,12 @@
   ],
   "idf.currentSetup": "C:\\Users\\Joao\\esp\\v6.0\\esp-idf",
   "idf.flashType": "UART",
-  "idf.portWin": "COM15",
+  "idf.portWin": "COM19",
   "idf.openOcdConfigs": [
-    "board/esp32c6-builtin.cfg"
+    "board/esp32-wrover-kit-3.3v.cfg"
   ],
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c6",
+    "IDF_TARGET": "esp32",
     "ADF_PATH": "C:\\Users\\Joao\\.espressif\\esp-adf"
   }
 }
